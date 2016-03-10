@@ -12,7 +12,7 @@ void initializePositions(float3 *p, float3 *pOld, int size);
 
 __global__ void verletKernel(float3 *p, float3 *pOld, float3 *pTemp, float3 a, float dt)
 {
-    int i = threadIdx.x;
+	int i = blockDim.x*blockIdx.x + threadIdx.x;
 	pTemp[i] = p[i];
     p[i] = p[i] + p[i] - pOld[i] + a* dt*dt;
 	pOld[i] = pTemp[i];
@@ -20,21 +20,26 @@ __global__ void verletKernel(float3 *p, float3 *pOld, float3 *pTemp, float3 a, f
 
 int main()
 {
-    const int arraySize = 10000;
-	float3 p[arraySize] = { make_float3(1, 1, 1), make_float3(2, 1, 1), make_float3(3, 1, 1), make_float3(4, 1, 1), make_float3(5, 1, 1) };
-	float3 pOld[arraySize] = { make_float3(1, 1, 1), make_float3(2, 1, 1), make_float3(3, 1, 1), make_float3(4, 1, 1), make_float3(5, 1, 1) };
-	float3 pTemp[arraySize] = { 0 };
+    const int arraySize = 50000;
+
+	float3 *p = new float3[arraySize];
+	float3 *pOld = new float3[arraySize];
+	float3 *pTemp = new float3[arraySize];
+
+
 	float3 a = make_float3(0, -9.82f, 0);
   
 	initializePositions(p, pOld, arraySize);
+	cudaError_t cudaStatus;
+	for (int i = 0; i < 1000; i++){
 
-
-    // Add vectors in parallel.
-	cudaError_t cudaStatus = calcVerletStep(p, pOld, pTemp, a, 0.016f ,arraySize);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "addWithCuda failed!");
-        return 1;
-    }
+		// Add vectors in parallel.
+		cudaStatus = calcVerletStep(p, pOld, pTemp, a, 0.016f, arraySize);
+		if (cudaStatus != cudaSuccess) {
+			fprintf(stderr, "addWithCuda failed!");
+			return 1;
+		}
+	}
 	
 	/*
 	printf("Result: ");
@@ -45,8 +50,8 @@ int main()
 
 	for (const float3 &position : pOld){
 		print(position);
-	}
-	*/
+	}*/
+	
 
 	print(p[arraySize-1]);
 
@@ -77,6 +82,12 @@ void update(float timestep) {
 
 void print(float3 v){
 	printf("(%f, %f, %f)", v.x, v.y, v.z);
+}
+
+//Round a / b to nearest higher integer value
+int iDivUp(int a, int b)
+{
+	return (a % b != 0) ? (a / b + 1) : (a / b);
 }
 
 // Helper function for using CUDA to add vectors in parallel.
@@ -126,8 +137,11 @@ cudaError_t calcVerletStep(float3 *p, float3 *pOld, float3 *pTemp, float3 a, flo
         goto Error;
     }
 
+
+	int numThreads = 256;
+	int numBlocks = iDivUp(size, numThreads); 
     // Launch a kernel on the GPU with one thread for each element.
-	verletKernel <<<size/16, 16 >>>(dev_p, dev_pOld, dev_pTemp, a, dt);
+	verletKernel <<<numBlocks, numThreads >>>(dev_p, dev_pOld, dev_pTemp, a, dt);
 
     // Check for any errors launching the kernel
     cudaStatus = cudaGetLastError();
