@@ -6,13 +6,9 @@
 #include "operators.h"
 #include <gl/glew.h>
 #include <GL/freeglut.h> 
-#include "shaders.h"
 #include <math.h>
 #include <ctime>
 
-#ifndef M_PI
-#define M_PI    3.1415926535897932384626433832795
-#endif
 
 cudaError_t calcVerletStep(float3 *p, float3 *pOld, float3 *pTemp, float3 a, float dt, unsigned int size);
 void print(float3 v);
@@ -21,21 +17,14 @@ void initializePositions(float3 *p, float3 *pOld, int size);
 const unsigned int window_width = 1024;
 const unsigned int window_height = 1024;
 
-
-const unsigned int mesh_width = 1024;
-const unsigned int mesh_height = 1024;
-
-
-GLuint program, vbo;
-void *d_vbo_buffer = NULL;
-
-float particleRadius = 1.0f / 64.0f;
-const int arraySize = 50000;
+const int arraySize = 5000;
 float3 *p = new float3[arraySize];
 float3 *pOld = new float3[arraySize];
 float3 *pTemp = new float3[arraySize];
 
-float3 a = make_float3(0, -9.82f, 0);
+float3 a = make_float3(0, -2.0f, 0);
+int currentTime = 0;
+int previousTime = 0;
 
 __global__ void verletKernel(float3 *p, float3 *pOld, float3 *pTemp, float3 a, float dt)
 {
@@ -43,6 +32,20 @@ __global__ void verletKernel(float3 *p, float3 *pOld, float3 *pTemp, float3 a, f
 	pTemp[i] = p[i];
     p[i] = p[i] + p[i] - pOld[i] + a* dt*dt;
 	pOld[i] = pTemp[i];
+
+	//Collision against floor
+	if (p[i].y < 0){
+
+		//Bouncing collision
+		pTemp[i].y = p[i].y;
+		p[i].y = pOld[i].y*0.5;
+		pOld[i].y = pTemp[i].y;
+
+		//Rain effect
+		/*p[i].y = threadIdx.x / 256.0*2;
+		pOld[i].y = threadIdx.x / 256.0 * 2;*/
+	}
+
 }
 
 
@@ -51,8 +54,14 @@ static void display(void)
 
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+	currentTime = glutGet(GLUT_ELAPSED_TIME);
+	float deltaTime = (currentTime - previousTime)>16 ? 0.016 : (currentTime - previousTime)/1000.0;
+	//printf(" %f ", deltaTime);
+
+	previousTime = currentTime;
+
 	cudaError_t cudaStatus;
-	cudaStatus = calcVerletStep(p, pOld, pTemp, a, 0.0016f, arraySize);
+	cudaStatus = calcVerletStep(p, pOld, pTemp, a, deltaTime, arraySize);
 	if (cudaStatus != cudaSuccess) {
 		fprintf(stderr, "cudaDeviceReset failed!");
 	}
@@ -65,7 +74,7 @@ static void display(void)
 		glVertex3f(p[i].x, p[i].y, p[i].z );
 	}
 	glEnd();
-
+	
 	glutSwapBuffers();
 	glutPostRedisplay();
 
@@ -87,12 +96,12 @@ int main(int argc, char **argv)
 
 	glutInit(&argc, argv);
 	glutInitDisplayMode(GLUT_RGBA | GLUT_DOUBLE);
-	glutInitWindowSize(1024, 1024);
+	glutInitWindowSize(window_width, window_height);
 	glutCreateWindow("Verlet Integrator");
 
-	glTranslatef(0.0f, -0.7f, 0.0f);
+	glTranslatef(0.0f, -0.9f, 0.0f);
 	glutDisplayFunc(display);
-	glutTimerFunc(0, timer, 0);
+	//glutTimerFunc(0, timer, 0);
 	glutMainLoop();
 
 
@@ -136,7 +145,7 @@ void initializePositions(float3 *p, float3 *pOld, int size){
 	srand(time(0));
 	for (int i = 0; i < size; i++){
 		float xPos = (rand() % 2000 - 1000) / 1000.0;
-		float yPos = (rand() % 2000 - 1000) / 1000.0;
+		float yPos = (rand() % 100000 +50000) / 100000.0;
 		float zPos = (rand() % 2000 - 1000) / 1000.0;
 		p[i] = make_float3(xPos, yPos, zPos);
 		pOld[i] = make_float3(xPos, yPos, zPos);

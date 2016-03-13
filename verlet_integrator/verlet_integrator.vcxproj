@@ -155,10 +155,6 @@ copy "$(CudaToolkitBinDir)\cudart*.dll" "$(OutDir)"</Command>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="operators.h" />
-    <ClInclude Include="shaders.h" />
-  </ItemGroup>
-  <ItemGroup>
-    <ClCompile Include="shaders.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
