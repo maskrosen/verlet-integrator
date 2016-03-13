@@ -4,11 +4,38 @@
 
 #include <stdio.h>
 #include "operators.h"
+#include <gl/glew.h>
+#include <GL/freeglut.h> 
+#include "shaders.h"
+#include <math.h>
+#include <ctime>
 
+#ifndef M_PI
+#define M_PI    3.1415926535897932384626433832795
+#endif
 
 cudaError_t calcVerletStep(float3 *p, float3 *pOld, float3 *pTemp, float3 a, float dt, unsigned int size);
 void print(float3 v);
 void initializePositions(float3 *p, float3 *pOld, int size);
+
+const unsigned int window_width = 1024;
+const unsigned int window_height = 1024;
+
+
+const unsigned int mesh_width = 1024;
+const unsigned int mesh_height = 1024;
+
+
+GLuint program, vbo;
+void *d_vbo_buffer = NULL;
+
+float particleRadius = 1.0f / 64.0f;
+const int arraySize = 50000;
+float3 *p = new float3[arraySize];
+float3 *pOld = new float3[arraySize];
+float3 *pTemp = new float3[arraySize];
+
+float3 a = make_float3(0, -9.82f, 0);
 
 __global__ void verletKernel(float3 *p, float3 *pOld, float3 *pTemp, float3 a, float dt)
 {
@@ -18,18 +45,58 @@ __global__ void verletKernel(float3 *p, float3 *pOld, float3 *pTemp, float3 a, f
 	pOld[i] = pTemp[i];
 }
 
-int main()
+
+static void display(void)
 {
-    const int arraySize = 50000;
 
-	float3 *p = new float3[arraySize];
-	float3 *pOld = new float3[arraySize];
-	float3 *pTemp = new float3[arraySize];
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+	cudaError_t cudaStatus;
+	cudaStatus = calcVerletStep(p, pOld, pTemp, a, 0.0016f, arraySize);
+	if (cudaStatus != cudaSuccess) {
+		fprintf(stderr, "cudaDeviceReset failed!");
+	}
+
+	glBegin(GL_POINTS);
+	for (unsigned int i = 0; i<arraySize; i++)
+	{
+		
+		glColor4f(1.0f, 1.0f, 1.0f, 0.5f);
+		glVertex3f(p[i].x, p[i].y, p[i].z );
+	}
+	glEnd();
+
+	glutSwapBuffers();
+	glutPostRedisplay();
+
+}
 
 
-	float3 a = make_float3(0, -9.82f, 0);
+void timer(int extra)
+{
+	glutPostRedisplay();
+	glutTimerFunc(16, timer, 0);
+}
+
+int main(int argc, char **argv)
+{
+    
+
   
 	initializePositions(p, pOld, arraySize);
+
+	glutInit(&argc, argv);
+	glutInitDisplayMode(GLUT_RGBA | GLUT_DOUBLE);
+	glutInitWindowSize(1024, 1024);
+	glutCreateWindow("Verlet Integrator");
+
+	glTranslatef(0.0f, -0.7f, 0.0f);
+	glutDisplayFunc(display);
+	glutTimerFunc(0, timer, 0);
+	glutMainLoop();
+
+
+	/*
 	cudaError_t cudaStatus;
 	for (int i = 0; i < 1000; i++){
 
@@ -41,7 +108,6 @@ int main()
 		}
 	}
 	
-	/*
 	printf("Result: ");
 
 	for (const float3 &position : p){
@@ -50,7 +116,7 @@ int main()
 
 	for (const float3 &position : pOld){
 		print(position);
-	}*/
+	}
 	
 
 	print(p[arraySize-1]);
@@ -62,14 +128,18 @@ int main()
         fprintf(stderr, "cudaDeviceReset failed!");
         return 1;
     }
-
+	*/
     return 0;
 }
 
 void initializePositions(float3 *p, float3 *pOld, int size){
+	srand(time(0));
 	for (int i = 0; i < size; i++){
-		p[i] = make_float3(i, 1, 1);
-		pOld[i] = make_float3(i, 1, 1);
+		float xPos = (rand() % 2000 - 1000) / 1000.0;
+		float yPos = (rand() % 2000 - 1000) / 1000.0;
+		float zPos = (rand() % 2000 - 1000) / 1000.0;
+		p[i] = make_float3(xPos, yPos, zPos);
+		pOld[i] = make_float3(xPos, yPos, zPos);
 	}
 }
 
@@ -98,6 +168,7 @@ cudaError_t calcVerletStep(float3 *p, float3 *pOld, float3 *pTemp, float3 a, flo
 	float3 *dev_pTemp = 0;
     cudaError_t cudaStatus;
 
+	
     // Choose which GPU to run on, change this on a multi-GPU system.
     cudaStatus = cudaSetDevice(0);
     if (cudaStatus != cudaSuccess) {
