@@ -11,6 +11,7 @@
 #include "helper_cuda.h"         // helper functions for CUDA error check
 #include "helper_cuda_gl.h"   
 #include <cuda_gl_interop.h>
+#include "utils.h";
 
 
 cudaError_t calcVerletStep(float3 *p, float3 *pOld, float3 a, float dt, unsigned int size);
@@ -24,6 +25,9 @@ const unsigned int window_height = 1024;
 
 const unsigned int mesh_width = 512;
 const unsigned int mesh_height = 512;
+
+GLuint shaderProgram;
+
 
 // vbo variables
 GLuint vbo;
@@ -83,10 +87,20 @@ static void display(void)
 
 	previousTime = currentTime;
 	
+	printf(" %f ", deltaTime);
+
 	runCuda(&cuda_vbo_resource, deltaTime);
 
 
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+	glEnable(GL_POINT_SPRITE_ARB);
+	glTexEnvi(GL_POINT_SPRITE_ARB, GL_COORD_REPLACE_ARB, GL_TRUE);
+	glEnable(GL_VERTEX_PROGRAM_POINT_SIZE_NV);
+	glDepthMask(GL_TRUE);
+	glEnable(GL_DEPTH_TEST);
+
+	glUseProgram(shaderProgram);
 
 	// set view matrix
 	glMatrixMode(GL_MODELVIEW);
@@ -99,11 +113,11 @@ static void display(void)
 	glVertexPointer(4, GL_FLOAT, 0, 0);
 
 	glEnableClientState(GL_VERTEX_ARRAY);
-	glColor3f(1.0, 0.0, 0.0);
-	glDrawArrays(GL_POINTS, 0, mesh_width * mesh_height);
+	glColor3f(0.5, 0.5, 1.0);
+	glDrawArrays(GL_POINTS, 0, arraySize);
 	glDisableClientState(GL_VERTEX_ARRAY);
 
-
+	glUseProgram(0);
 	glutSwapBuffers();
 	glutPostRedisplay();
 
@@ -211,15 +225,6 @@ void cleanup()
 	cudaDeviceReset();
 }
 
-void print(float3 v){
-	printf("(%f, %f, %f)", v.x, v.y, v.z);
-}
-
-//Round a / b to nearest higher integer value
-int iDivUp(int a, int b)
-{
-	return (a % b != 0) ? (a / b + 1) : (a / b);
-}
 
 
 void launch_kernel(float4 *pos, unsigned int mesh_width,
@@ -316,6 +321,7 @@ void keyboard(unsigned char key, int /*x*/, int /*y*/)
 }
 
 
+
 int main(int argc, char **argv)
 {
 
@@ -345,6 +351,8 @@ int main(int argc, char **argv)
 
 
 	glewInit();
+
+	shaderProgram = loadShaders();
 
 	// viewport
 	glViewport(0, 0, window_width, window_height);
