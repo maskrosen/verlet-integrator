@@ -8,43 +8,68 @@
 #include <GL/freeglut.h> 
 #include <math.h>
 #include <ctime>
+#include "helper_cuda.h"         // helper functions for CUDA error check
+#include "helper_cuda_gl.h"   
+#include <cuda_gl_interop.h>
 
 
-cudaError_t calcVerletStep(float3 *p, float3 *pOld, float3 *pTemp, float3 a, float dt, unsigned int size);
+cudaError_t calcVerletStep(float3 *p, float3 *pOld, float3 a, float dt, unsigned int size);
 void print(float3 v);
 void initializePositions(float3 *p, float3 *pOld, int size);
+void runCuda(struct cudaGraphicsResource **vbo_resource, float deltaTime);
 
 const unsigned int window_width = 1024;
 const unsigned int window_height = 1024;
 
-const int arraySize = 5000;
+
+const unsigned int mesh_width = 512;
+const unsigned int mesh_height = 512;
+
+// vbo variables
+GLuint vbo;
+struct cudaGraphicsResource *cuda_vbo_resource;
+void *d_vbo_buffer = NULL;
+
+const int arraySize = 50000;
 float3 *p = new float3[arraySize];
 float3 *pOld = new float3[arraySize];
-float3 *pTemp = new float3[arraySize];
 
 float3 a = make_float3(0, -2.0f, 0);
 int currentTime = 0;
 int previousTime = 0;
 
-__global__ void verletKernel(float3 *p, float3 *pOld, float3 *pTemp, float3 a, float dt)
+//Cuda varables
+float3 *dev_p = 0;
+float3 *dev_pOld = 0;
+
+// mouse controls
+int mouse_old_x, mouse_old_y;
+int mouse_buttons = 0;
+float rotate_x = 0.0, rotate_y = 0.0;
+float translate_z = -3.0;
+
+__global__ void verletKernel(float4 *pos, float3 *p, float3 *pOld, float3 a, float dt)
 {
 	int i = blockDim.x*blockIdx.x + threadIdx.x;
-	pTemp[i] = p[i];
+	float3 pTemp = p[i];
     p[i] = p[i] + p[i] - pOld[i] + a* dt*dt;
-	pOld[i] = pTemp[i];
+	pOld[i] = pTemp;
 
 	//Collision against floor
 	if (p[i].y < 0){
 
 		//Bouncing collision
-		pTemp[i].y = p[i].y;
+		pTemp.y = p[i].y;
 		p[i].y = pOld[i].y*0.5;
-		pOld[i].y = pTemp[i].y;
+		pOld[i].y = pTemp.y;
 
 		//Rain effect
 		/*p[i].y = threadIdx.x / 256.0*2;
 		pOld[i].y = threadIdx.x / 256.0 * 2;*/
 	}
+
+	// write output vertex
+	pos[i] = make_float4(p[i].x, p[i].y, p[i].z, 1.0f);
 
 }
 
@@ -52,29 +77,33 @@ __global__ void verletKernel(float3 *p, float3 *pOld, float3 *pTemp, float3 a, f
 static void display(void)
 {
 
-	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 	currentTime = glutGet(GLUT_ELAPSED_TIME);
 	float deltaTime = (currentTime - previousTime)>16 ? 0.016 : (currentTime - previousTime)/1000.0;
-	//printf(" %f ", deltaTime);
 
 	previousTime = currentTime;
-
-	cudaError_t cudaStatus;
-	cudaStatus = calcVerletStep(p, pOld, pTemp, a, deltaTime, arraySize);
-	if (cudaStatus != cudaSuccess) {
-		fprintf(stderr, "cudaDeviceReset failed!");
-	}
-
-	glBegin(GL_POINTS);
-	for (unsigned int i = 0; i<arraySize; i++)
-	{
-		
-		glColor4f(1.0f, 1.0f, 1.0f, 0.5f);
-		glVertex3f(p[i].x, p[i].y, p[i].z );
-	}
-	glEnd();
 	
+	runCuda(&cuda_vbo_resource, deltaTime);
+
+
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+	// set view matrix
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
+	glTranslatef(0.0, 0.0, translate_z);
+	glRotatef(rotate_x, 1.0, 0.0, 0.0);
+	glRotatef(rotate_y, 0.0, 1.0, 0.0);
+
+	glBindBuffer(GL_ARRAY_BUFFER, vbo);
+	glVertexPointer(4, GL_FLOAT, 0, 0);
+
+	glEnableClientState(GL_VERTEX_ARRAY);
+	glColor3f(1.0, 0.0, 0.0);
+	glDrawArrays(GL_POINTS, 0, mesh_width * mesh_height);
+	glDisableClientState(GL_VERTEX_ARRAY);
+
+
 	glutSwapBuffers();
 	glutPostRedisplay();
 
@@ -87,59 +116,6 @@ void timer(int extra)
 	glutTimerFunc(16, timer, 0);
 }
 
-int main(int argc, char **argv)
-{
-    
-
-  
-	initializePositions(p, pOld, arraySize);
-
-	glutInit(&argc, argv);
-	glutInitDisplayMode(GLUT_RGBA | GLUT_DOUBLE);
-	glutInitWindowSize(window_width, window_height);
-	glutCreateWindow("Verlet Integrator");
-
-	glTranslatef(0.0f, -0.9f, 0.0f);
-	glutDisplayFunc(display);
-	//glutTimerFunc(0, timer, 0);
-	glutMainLoop();
-
-
-	/*
-	cudaError_t cudaStatus;
-	for (int i = 0; i < 1000; i++){
-
-		// Add vectors in parallel.
-		cudaStatus = calcVerletStep(p, pOld, pTemp, a, 0.016f, arraySize);
-		if (cudaStatus != cudaSuccess) {
-			fprintf(stderr, "addWithCuda failed!");
-			return 1;
-		}
-	}
-	
-	printf("Result: ");
-
-	for (const float3 &position : p){
-		print(position);
-	}
-
-	for (const float3 &position : pOld){
-		print(position);
-	}
-	
-
-	print(p[arraySize-1]);
-
-    // cudaDeviceReset must be called before exiting in order for profiling and
-    // tracing tools such as Nsight and Visual Profiler to show complete traces.
-    cudaStatus = cudaDeviceReset();
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaDeviceReset failed!");
-        return 1;
-    }
-	*/
-    return 0;
-}
 
 void initializePositions(float3 *p, float3 *pOld, int size){
 	srand(time(0));
@@ -149,14 +125,90 @@ void initializePositions(float3 *p, float3 *pOld, int size){
 		float zPos = (rand() % 2000 - 1000) / 1000.0;
 		p[i] = make_float3(xPos, yPos, zPos);
 		pOld[i] = make_float3(xPos, yPos, zPos);
-	}
+	}	
+
 }
 
-void update(float timestep) {
-	//Update the positions and velocities
-	// xi+1 = xi + (xi - xi-1) + a * dt * dt
+void initializeCuda(float3 *p, float3 *pOld, int size){
+	// Choose which GPU to run on, change this on a multi-GPU system.
+	checkCudaErrors(cudaSetDevice(0));
 
 
+	// Allocate GPU buffers for three vectors (two input, one output)    	
+	checkCudaErrors(cudaMalloc((void**)&dev_p, size * sizeof(float3)));
+	checkCudaErrors(cudaMalloc((void**)&dev_pOld, size * sizeof(float3)));
+
+
+	// Copy postition vectors from host memory to GPU buffers.
+
+	checkCudaErrors(cudaMemcpy(dev_p, p, size * sizeof(float3), cudaMemcpyHostToDevice));
+	checkCudaErrors(cudaMemcpy(dev_pOld, pOld, size * sizeof(float3), cudaMemcpyHostToDevice));
+
+}
+
+void resetPostions(float3 *p, float3 *pOld, int size){
+	initializePositions(p, pOld, size);
+	// Copy postition vectors from host memory to GPU buffers.
+	checkCudaErrors(cudaMemcpy(dev_p, p, size * sizeof(float3), cudaMemcpyHostToDevice));
+	checkCudaErrors(cudaMemcpy(dev_pOld, pOld, size * sizeof(float3), cudaMemcpyHostToDevice));
+}
+
+////////////////////////////////////////////////////////////////////////////////
+//! Create VBO
+////////////////////////////////////////////////////////////////////////////////
+void createVBO(GLuint *vbo, struct cudaGraphicsResource **vbo_res,
+	unsigned int vbo_res_flags)
+{
+	//assert(vbo);
+
+	// create buffer object
+	glGenBuffers(1, vbo);
+	glBindBuffer(GL_ARRAY_BUFFER, *vbo);
+
+	// initialize buffer object
+	unsigned int size = mesh_width * mesh_height * 4 * sizeof(float);
+	glBufferData(GL_ARRAY_BUFFER, size, 0, GL_DYNAMIC_DRAW);
+
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+	// register this buffer object with CUDA
+	checkCudaErrors(cudaGraphicsGLRegisterBuffer(vbo_res, *vbo, vbo_res_flags));
+
+	//SDK_CHECK_ERROR_GL();
+}
+
+////////////////////////////////////////////////////////////////////////////////
+//! Delete VBO
+////////////////////////////////////////////////////////////////////////////////
+void deleteVBO(GLuint *vbo, struct cudaGraphicsResource *vbo_res)
+{
+
+	// unregister this buffer object with CUDA
+	checkCudaErrors(cudaGraphicsUnregisterResource(vbo_res));
+
+	glBindBuffer(1, *vbo);
+	glDeleteBuffers(1, vbo);
+
+	*vbo = 0;
+}
+
+void cleanup()
+{
+
+	if (vbo)
+	{
+		deleteVBO(&vbo, cuda_vbo_resource);
+	}
+	
+	cudaFree(dev_p);
+	cudaFree(dev_pOld);
+
+	// cudaDeviceReset causes the driver to clean up all state. While
+	// not mandatory in normal operation, it is good practice.  It is also
+	// needed to ensure correct operation when the application is being
+	// profiled. Calling cudaDeviceReset causes all profile data to be
+	// flushed before the application exits
+	cudaDeviceReset();
 }
 
 void print(float3 v){
@@ -169,92 +221,147 @@ int iDivUp(int a, int b)
 	return (a % b != 0) ? (a / b + 1) : (a / b);
 }
 
-// Helper function for using CUDA to add vectors in parallel.
-cudaError_t calcVerletStep(float3 *p, float3 *pOld, float3 *pTemp, float3 a, float dt, unsigned int size)
+
+void launch_kernel(float4 *pos, unsigned int mesh_width,
+	unsigned int mesh_height, float time)
 {
-    float3 *dev_p = 0;
-	float3 *dev_pOld = 0;
-	float3 *dev_pTemp = 0;
-    cudaError_t cudaStatus;
-
-	
-    // Choose which GPU to run on, change this on a multi-GPU system.
-    cudaStatus = cudaSetDevice(0);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaSetDevice failed!  Do you have a CUDA-capable GPU installed?");
-        goto Error;
-    }
-
-    // Allocate GPU buffers for three vectors (two input, one output)    .
-    cudaStatus = cudaMalloc((void**)&dev_p, size * sizeof(float3));
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!");
-        goto Error;
-    }
-
-    cudaStatus = cudaMalloc((void**)&dev_pOld, size * sizeof(float3));
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!");
-        goto Error;
-    }
-	
-    cudaStatus = cudaMalloc((void**)&dev_pTemp, size * sizeof(float3));
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!");
-        goto Error;
-    }
-
-    // Copy input vectors from host memory to GPU buffers.
-    cudaStatus = cudaMemcpy(dev_p, p, size * sizeof(float3), cudaMemcpyHostToDevice);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMemcpy failed!");
-        goto Error;
-    }
-
-    cudaStatus = cudaMemcpy(dev_pOld, pOld, size * sizeof(float3), cudaMemcpyHostToDevice);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMemcpy failed!");
-        goto Error;
-    }
+	// execute the kernel
+	/*dim3 block(8, 8, 1);
+	dim3 grid(mesh_width / block.x, mesh_height / block.y, 1);
+	simple_vbo_kernel << < grid, block >> >(pos, mesh_width, mesh_height, time);*/
 
 
 	int numThreads = 256;
-	int numBlocks = iDivUp(size, numThreads); 
-    // Launch a kernel on the GPU with one thread for each element.
-	verletKernel <<<numBlocks, numThreads >>>(dev_p, dev_pOld, dev_pTemp, a, dt);
+	int numBlocks = iDivUp(arraySize, numThreads);
+	// Launch a kernel on the GPU with one thread for each element.
+	verletKernel <<<numBlocks, numThreads >>>(pos, dev_p, dev_pOld, a, time);
+}
 
-    // Check for any errors launching the kernel
-    cudaStatus = cudaGetLastError();
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "addKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
-        goto Error;
-    }
-    
-    // cudaDeviceSynchronize waits for the kernel to finish, and returns
-    // any errors encountered during the launch.
-    cudaStatus = cudaDeviceSynchronize();
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching addKernel!\n", cudaStatus);
-        goto Error;
-    }
 
-    // Copy output vector from GPU buffer to host memory.
-    cudaStatus = cudaMemcpy(p, dev_p, size * sizeof(float3), cudaMemcpyDeviceToHost);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMemcpy failed!");
-        goto Error;
-    }
+////////////////////////////////////////////////////////////////////////////////
+//! Run the Cuda part of the computation
+////////////////////////////////////////////////////////////////////////////////
+void runCuda(struct cudaGraphicsResource **vbo_resource, float deltaTime)
+{
+	// map OpenGL buffer object for writing from CUDA
+	float4 *dptr;
+	checkCudaErrors(cudaGraphicsMapResources(1, vbo_resource, 0));
+	size_t num_bytes;
+	checkCudaErrors(cudaGraphicsResourceGetMappedPointer((void **)&dptr, &num_bytes,
+		*vbo_resource));
+	
+	launch_kernel(dptr, mesh_width, mesh_height, deltaTime);
 
-	cudaStatus = cudaMemcpy(pOld, dev_pOld, size * sizeof(float3), cudaMemcpyDeviceToHost);
-	if (cudaStatus != cudaSuccess) {
-		fprintf(stderr, "cudaMemcpy failed!");
-		goto Error;
+	// unmap buffer object
+	checkCudaErrors(cudaGraphicsUnmapResources(1, vbo_resource, 0));
+}
+
+////////////////////////////////////////////////////////////////////////////////
+//! Mouse event handlers
+////////////////////////////////////////////////////////////////////////////////
+void mouse(int button, int state, int x, int y)
+{
+	if (state == GLUT_DOWN)
+	{
+		mouse_buttons |= 1 << button;
+	}
+	else if (state == GLUT_UP)
+	{
+		mouse_buttons = 0;
 	}
 
-Error:
-    cudaFree(dev_p);
-    cudaFree(dev_pOld);
-    cudaFree(dev_pTemp);
-    
-    return cudaStatus;
+	mouse_old_x = x;
+	mouse_old_y = y;
+}
+
+void motion(int x, int y)
+{
+	float dx, dy;
+	dx = (float)(x - mouse_old_x);
+	dy = (float)(y - mouse_old_y);
+
+	if (mouse_buttons & 1)
+	{
+		rotate_x += dy * 0.2f;
+		rotate_y += dx * 0.2f;
+	}
+	else if (mouse_buttons & 4)
+	{
+		translate_z += dy * 0.01f;
+	}
+
+	mouse_old_x = x;
+	mouse_old_y = y;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+//! Keyboard events handler
+////////////////////////////////////////////////////////////////////////////////
+void keyboard(unsigned char key, int /*x*/, int /*y*/)
+{
+	switch (key)
+	{
+	case (27) :
+#if defined(__APPLE__) || defined(MACOSX)
+		exit(EXIT_SUCCESS);
+#else
+		glutDestroyWindow(glutGetWindow());
+		return;
+#endif
+		break;
+
+	case (32) :
+		resetPostions(p, pOld, arraySize);
+	}
+}
+
+
+int main(int argc, char **argv)
+{
+
+
+
+	initializePositions(p, pOld, arraySize);
+	initializeCuda(p, pOld, arraySize);
+	
+
+	glutInit(&argc, argv);
+	glutInitDisplayMode(GLUT_RGBA | GLUT_DOUBLE);
+	glutInitWindowSize(window_width, window_height);
+	glutCreateWindow("Verlet Integrator");
+
+	//glTranslatef(0.0f, -0.9f, 0.0f);
+
+	cudaGLSetGLDevice(gpuGetMaxGflopsDeviceId());
+
+
+	//Register callbacks
+	glutDisplayFunc(display);
+	//glutTimerFunc(0, timer, 0);
+	glutKeyboardFunc(keyboard);
+	glutMouseFunc(mouse);
+	glutMotionFunc(motion);
+	glutCloseFunc(cleanup);
+
+
+	glewInit();
+
+	// viewport
+	glViewport(0, 0, window_width, window_height);
+
+	// projection
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+	gluPerspective(60.0, (GLfloat)window_width / (GLfloat)window_height, 0.1, 10.0);
+
+
+	// create VBO
+	createVBO(&vbo, &cuda_vbo_resource, cudaGraphicsMapFlagsWriteDiscard);
+
+	glutMainLoop();
+
+
+	
+
+	return 0;
 }
