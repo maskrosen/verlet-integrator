@@ -34,13 +34,16 @@ GLuint vbo;
 struct cudaGraphicsResource *cuda_vbo_resource;
 void *d_vbo_buffer = NULL;
 
-const int arraySize = 50000;
+const int arraySize = 250000;
 float3 *p = new float3[arraySize];
 float3 *pOld = new float3[arraySize];
 
 float3 a = make_float3(0, -2.0f, 0);
 int currentTime = 0;
 int previousTime = 0;
+int frameCount = 0;
+float timeCount = 0;
+float fps = 0;
 
 //Cuda varables
 float3 *dev_p = 0;
@@ -84,10 +87,22 @@ static void display(void)
 
 	currentTime = glutGet(GLUT_ELAPSED_TIME);
 	float deltaTime = (currentTime - previousTime)>16 ? 0.016 : (currentTime - previousTime)/1000.0;
-
+	timeCount += deltaTime;
 	previousTime = currentTime;
+
+	frameCount++;
+
 	
-	printf(" %f ", deltaTime);
+	//printf(" %f ", deltaTime);
+
+	if (timeCount >= 1){
+		fps = frameCount/1.0 / timeCount;
+		frameCount = 0;
+		timeCount = 0;
+	}
+	char fpsText[256];
+	sprintf(fpsText, "Verlet Integrator: %3.1f fps", fps);
+	glutSetWindowTitle(fpsText);
 
 	runCuda(&cuda_vbo_resource, deltaTime);
 
@@ -127,7 +142,7 @@ static void display(void)
 void timer(int extra)
 {
 	glutPostRedisplay();
-	glutTimerFunc(16, timer, 0);
+	glutTimerFunc(5, timer, 0);
 }
 
 
